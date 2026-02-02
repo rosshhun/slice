@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux (native)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            cross: false
+          # Linux portable (musl)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive: tar.gz
+            cross: false
+          # Linux ARM64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            archive: tar.gz
+            cross: true
+          # macOS Apple Silicon (M1)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            cross: false
+          # macOS Intel (Run on Intel runner to avoid cross-compilation)
+          - os: macos-13 
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            cross: false
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Cross-compilation deps for Linux ARM64
+      - name: Install cross-compile deps (Linux ARM64)
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      # musl for portable Linux x64
+      - name: Install musl (Linux x64 musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # OPTIONAL: Strip binary to reduce size (Linux/macOS only)
+      - name: Strip binary (Unix)
+        if: matrix.os != 'windows-latest'
+        run: strip target/${{ matrix.target }}/release/slice
+
+      - name: Pack (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czvf ../../../slice-${{ github.ref_name }}-${{ matrix.target }}.tar.gz slice
+          cd ../../..
+
+      # FIX: Use bash shell on Windows to make 'zip' command work
+      - name: Pack (Windows)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../slice-${{ github.ref_name }}-${{ matrix.target }}.zip slice.exe
+          cd ../../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: slice-${{ matrix.target }}
+          path: slice-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive }}
+
+  release:
+    name: Create release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rename and collect
+        run: |
+          mkdir -p release
+          # Move artifacts to release folder
+          for d in artifacts/*/; do
+            for f in "$d"/*; do
+              [ -f "$f" ] && mv "$f" release/
+            done
+          done
+          
+          # Generate checksums (Professional touch)
+          cd release
+          sha256sum * > SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -61,57 +61,55 @@ fn get_context_sizes(args: &Args) -> (usize, usize) {
 // Update the function signature to accept 'args'
 pub(crate) fn slice_file(path: &Path, ranges: &[Range<usize>], args: &Args) -> anyhow::Result<()> {
     let file = File::open(path)?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file); // Make reader mutable
     let mut writer = BufWriter::new(io::stdout().lock());
 
     let (before_size, after_size) = get_context_sizes(args);
-
-    // Use the 1-based type we store (String) but we need the index for line numbers
     let mut before_buffer: VecDeque<(usize, String)> = VecDeque::with_capacity(before_size);
     let mut print_after_count = 0;
 
-    // Optimization
+    // Optimization: Stop early
     let max_line = ranges.iter().map(|r| r.end).max().unwrap_or(usize::MAX) + after_size;
 
-    for (index, line_result) in reader.lines().enumerate() {
+    // --- NEW: REUSABLE BUFFER STRATEGY ---
+    let mut line_buf = String::new(); // Allocate ONCE
+    let mut index = 0;
+
+    // We use a while loop with read_line
+    while reader.read_line(&mut line_buf)? > 0 {
         if index >= max_line { break; }
 
-        let line = line_result?;
-        // Calculate the "Human" line number (Index + 1)
         let line_num = index + 1;
+
+        // Trim the newline for printing logic (read_line includes \n)
+        let line_content = line_buf.trim_end();
 
         let is_match = ranges.iter().any(|r| r.contains(&index));
 
         if is_match {
-            // A. HIT!
-
-            // 1. Dump History
+            // A. HIT
             while let Some((hist_num, hist_line)) = before_buffer.pop_front() {
-                print_line(&mut writer, &hist_line, hist_num, args, false)?; // <--- false
+                print_line(&mut writer, &hist_line, hist_num, args, false)?;
             }
-
-            // 2. Print Current
-            print_line(&mut writer, &line, line_num, args, true)?;
-
+            print_line(&mut writer, line_content, line_num, args, true)?;
             print_after_count = after_size;
-
         } else {
             // B. NO HIT
             if print_after_count > 0 {
-                // Printing "After" Context
-                print_line(&mut writer, &line, line_num, args, false)?;
+                print_line(&mut writer, line_content, line_num, args, false)?;
                 print_after_count -= 1;
-            } else {
-                // Save to History
-                if before_size > 0 {
-                    // Store BOTH line number and text
-                    before_buffer.push_back((line_num, line));
-                    if before_buffer.len() > before_size {
-                        before_buffer.pop_front();
-                    }
+            } else if before_size > 0 {
+                // Only clone string if we absolutely must save it for context
+                before_buffer.push_back((line_num, line_content.to_string()));
+                if before_buffer.len() > before_size {
+                    before_buffer.pop_front();
                 }
             }
         }
+
+        // IMPORTANT: Clear the buffer to reuse the memory for the next line
+        line_buf.clear();
+        index += 1;
     }
 
     writer.flush()?;

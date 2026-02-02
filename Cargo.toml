@@ -1,9 +1,21 @@
 [package]
 name = "slice"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
+description = "Slice text files by lines, bytes, or ranges (head/tail/middle with extras)"
+readme = "README.md"
+license = "Apache-2.0"
+repository = "https://github.com/rosshhun/slice"
+homepage = "https://github.com/rosshhun/slice"
+keywords = ["cli", "head", "tail", "slice", "lines"]
+categories = ["command-line-utilities", "text-processing"]
 
 [dependencies]
 clap = { version = "4.5.56", features = ["derive"] }
 anyhow = "1.0.100"
 colored = "3.1.1"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.0"
+tempfile = "3.8"
