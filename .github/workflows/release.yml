@@ -16,36 +16,48 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux (native)
+          # Linux (native x64)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
             cross: false
+            strip_cmd: strip
+            
           # Linux portable (musl)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             archive: tar.gz
             cross: false
-          # Linux ARM64
+            strip_cmd: strip
+
+          # Linux ARM64 (Raspberry Pi / AWS Graviton)
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             archive: tar.gz
             cross: true
-          # macOS Apple Silicon (M1)
+            # FIX 1: Use the cross-compilation aware strip tool
+            strip_cmd: aarch64-linux-gnu-strip
+
+          # macOS Apple Silicon (Native)
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
             cross: false
-          # macOS Intel (Run on Intel runner to avoid cross-compilation)
-          - os: macos-13 
+            strip_cmd: strip
+
+          # macOS Intel (Cross-compile from M1 Mac - Works natively in Rust)
+          - os: macos-latest
             target: x86_64-apple-darwin
             archive: tar.gz
             cross: false
+            strip_cmd: strip
+
           # Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
             cross: false
+            # Windows doesn't use 'strip', we skip it logic below
 
     steps:
       - uses: actions/checkout@v4
@@ -70,10 +82,10 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      # OPTIONAL: Strip binary to reduce size (Linux/macOS only)
+      # FIX 1 APPLIED HERE: Use the specific strip command from the matrix
       - name: Strip binary (Unix)
         if: matrix.os != 'windows-latest'
-        run: strip target/${{ matrix.target }}/release/slice
+        run: ${{ matrix.strip_cmd }} target/${{ matrix.target }}/release/slice
 
       - name: Pack (Unix)
         if: matrix.archive == 'tar.gz'
@@ -82,7 +94,6 @@ jobs:
           tar czvf ../../../slice-${{ github.ref_name }}-${{ matrix.target }}.tar.gz slice
           cd ../../..
 
-      # FIX: Use bash shell on Windows to make 'zip' command work
       - name: Pack (Windows)
         if: matrix.archive == 'zip'
         shell: bash
@@ -116,7 +127,7 @@ jobs:
             done
           done
           
-          # Generate checksums (Professional touch)
+          # Generate checksums
           cd release
           sha256sum * > SHA256SUMS.txt
 
